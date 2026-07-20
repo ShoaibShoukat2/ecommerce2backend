@@ -101,11 +101,12 @@ class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'status', 'total', 'shipping_name',
-            'shipping_email', 'shipping_phone', 'shipping_address',
-            'shipping_city', 'shipping_zip', 'notes', 'items', 'created_at',
+            'id', 'order_number', 'status', 'payment_method', 'payment_status',
+            'total', 'shipping_name', 'shipping_email', 'shipping_phone',
+            'shipping_address', 'shipping_city', 'shipping_zip', 'notes',
+            'items', 'created_at',
         ]
-        read_only_fields = ['order_number', 'status', 'total']
+        read_only_fields = ['order_number', 'status', 'payment_status', 'total']
 
 
 class CheckoutSerializer(serializers.Serializer):
@@ -116,6 +117,12 @@ class CheckoutSerializer(serializers.Serializer):
     shipping_city = serializers.CharField(max_length=100)
     shipping_zip = serializers.CharField(max_length=20)
     notes = serializers.CharField(required=False, allow_blank=True)
+
+
+class RazorpayVerifySerializer(CheckoutSerializer):
+    razorpay_order_id = serializers.CharField(max_length=100)
+    razorpay_payment_id = serializers.CharField(max_length=100)
+    razorpay_signature = serializers.CharField(max_length=255)
 
 
 class WishlistSerializer(serializers.ModelSerializer):

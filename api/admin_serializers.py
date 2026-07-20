@@ -71,7 +71,7 @@ class AdminOrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'status', 'total', 'customer',
+            'id', 'order_number', 'status', 'payment_method', 'payment_status', 'total', 'customer',
             'shipping_name', 'shipping_email', 'shipping_phone',
             'shipping_address', 'shipping_city', 'shipping_zip',
             'notes', 'items', 'created_at', 'updated_at',

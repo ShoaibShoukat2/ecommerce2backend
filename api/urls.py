@@ -22,6 +22,8 @@ urlpatterns = [
     path('auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/profile/', views.profile, name='profile'),
+    path('payments/create-order/', views.create_razorpay_payment_order, name='payments-create-order'),
+    path('payments/verify/', views.verify_razorpay_payment, name='payments-verify'),
     path('admin/dashboard/', admin_views.admin_dashboard, name='admin-dashboard'),
     path('admin/', include(admin_router.urls)),
 ]

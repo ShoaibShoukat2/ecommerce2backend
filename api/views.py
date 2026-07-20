@@ -1,4 +1,6 @@
 import uuid
+from decimal import Decimal
+from django.conf import settings
 from django.db.models import Q
 from rest_framework import viewsets, status, generics
 from rest_framework.decorators import action, api_view, permission_classes
@@ -6,10 +8,13 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .models import Category, Product, Cart, CartItem, Order, OrderItem, Wishlist
+from .constants import FREE_SHIPPING_THRESHOLD, SHIPPING_COST
+from .payments import create_razorpay_order, verify_razorpay_signature
 from .serializers import (
     CategorySerializer, ProductSerializer, ProductListSerializer,
     CartSerializer, CartItemSerializer, OrderSerializer, CheckoutSerializer,
     RegisterSerializer, UserSerializer, WishlistSerializer,
+    RazorpayVerifySerializer,
 )
 
 
@@ -35,6 +40,38 @@ def get_or_create_cart(request):
         cart, _ = Cart.objects.get_or_create(session_key=session_key, user__isnull=True)
         return cart
     return None
+
+
+def calculate_order_total(cart):
+    subtotal = cart.subtotal
+    shipping = Decimal('0') if subtotal >= FREE_SHIPPING_THRESHOLD else Decimal(str(SHIPPING_COST))
+    return subtotal + shipping, shipping
+
+
+def finalize_order(cart, user, shipping_data, payment_method='cod', payment_status='pending',
+                   razorpay_order_id='', razorpay_payment_id=''):
+    total, _ = calculate_order_total(cart)
+    order = Order.objects.create(
+        user=user if user and user.is_authenticated else None,
+        total=total,
+        payment_method=payment_method,
+        payment_status=payment_status,
+        razorpay_order_id=razorpay_order_id,
+        razorpay_payment_id=razorpay_payment_id,
+        **shipping_data,
+    )
+    for item in cart.items.all():
+        OrderItem.objects.create(
+            order=order,
+            product=item.product,
+            product_name=item.product.name,
+            quantity=item.quantity,
+            price=item.product.price,
+        )
+        item.product.stock -= item.quantity
+        item.product.save()
+    cart.items.all().delete()
+    return order
 
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
@@ -174,26 +211,91 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
         serializer = CheckoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        subtotal = cart.subtotal
-        shipping = 9.99 if subtotal < 100 else 0
-        total = subtotal + shipping
-        order = Order.objects.create(
-            user=request.user if request.user.is_authenticated else None,
-            total=total,
-            **serializer.validated_data,
+        order = finalize_order(
+            cart,
+            request.user,
+            serializer.validated_data,
+            payment_method='cod',
+            payment_status='pending',
         )
-        for item in cart.items.all():
-            OrderItem.objects.create(
-                order=order,
-                product=item.product,
-                product_name=item.product.name,
-                quantity=item.quantity,
-                price=item.product.price,
-            )
-            item.product.stock -= item.quantity
-            item.product.save()
-        cart.items.all().delete()
         return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def create_razorpay_payment_order(request):
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+        return Response({'error': 'Razorpay is not configured'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    cart = get_or_create_cart(request)
+    if not cart or not cart.items.exists():
+        return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
+
+    serializer = CheckoutSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    total, _ = calculate_order_total(cart)
+    amount_paise = int(total * 100)
+    if amount_paise < 100:
+        return Response({'error': 'Order total must be at least Rs. 1'}, status=status.HTTP_400_BAD_REQUEST)
+
+    receipt = f"rcpt_{uuid.uuid4().hex[:12]}"
+    try:
+        razorpay_order = create_razorpay_order(amount_paise, receipt)
+    except Exception as exc:
+        return Response({'error': f'Failed to create payment order: {exc}'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    return Response({
+        'razorpay_order_id': razorpay_order['id'],
+        'amount': amount_paise,
+        'currency': 'INR',
+        'key_id': settings.RAZORPAY_KEY_ID,
+        'total': total,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_razorpay_payment(request):
+    if not settings.RAZORPAY_KEY_ID or not settings.RAZORPAY_KEY_SECRET:
+        return Response({'error': 'Razorpay is not configured'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    cart = get_or_create_cart(request)
+    if not cart or not cart.items.exists():
+        return Response({'error': 'Cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
+
+    serializer = RazorpayVerifySerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+
+    try:
+        verify_razorpay_signature(
+            data['razorpay_order_id'],
+            data['razorpay_payment_id'],
+            data['razorpay_signature'],
+        )
+    except Exception:
+        return Response({'error': 'Payment verification failed'}, status=status.HTTP_400_BAD_REQUEST)
+
+    shipping_data = {
+        'shipping_name': data['shipping_name'],
+        'shipping_email': data['shipping_email'],
+        'shipping_phone': data['shipping_phone'],
+        'shipping_address': data['shipping_address'],
+        'shipping_city': data['shipping_city'],
+        'shipping_zip': data['shipping_zip'],
+        'notes': data.get('notes', ''),
+    }
+    order = finalize_order(
+        cart,
+        request.user,
+        shipping_data,
+        payment_method='razorpay',
+        payment_status='paid',
+        razorpay_order_id=data['razorpay_order_id'],
+        razorpay_payment_id=data['razorpay_payment_id'],
+    )
+    return Response(OrderSerializer(order).data, status=status.HTTP_201_CREATED)
 
 
 class RegisterView(generics.CreateAPIView):
