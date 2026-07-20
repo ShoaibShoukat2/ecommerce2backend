@@ -25,10 +25,12 @@ def create_razorpay_order(amount_paise, receipt):
 
 def verify_razorpay_signature(order_id, payment_id, signature):
     message = f'{order_id}|{payment_id}'.encode('utf-8')
-    expected = hmac.new(
+    # hmac.new is the correct Python 3 API
+    mac = hmac.new(
         settings.RAZORPAY_KEY_SECRET.encode('utf-8'),
         message,
         hashlib.sha256,
-    ).hexdigest()
+    )
+    expected = mac.hexdigest()
     if not hmac.compare_digest(expected, signature):
         raise ValueError('Invalid payment signature')
