@@ -16,10 +16,17 @@ def create_razorpay_order(amount_paise, receipt):
             'currency': 'INR',
             'receipt': receipt,
             'payment_capture': 1,
+            'notes': {'receipt': receipt},
         },
         timeout=30,
     )
-    response.raise_for_status()
+    if not response.ok:
+        try:
+            err = response.json().get('error', {})
+            description = err.get('description') or err.get('reason') or response.text
+        except Exception:
+            description = response.text or 'Unknown Razorpay error'
+        raise ValueError(description)
     return response.json()
 
 

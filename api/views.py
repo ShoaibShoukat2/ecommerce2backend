@@ -126,7 +126,10 @@ class CartViewSet(viewsets.ViewSet):
         if not cart:
             return Response({'id': None, 'items': [], 'total_items': 0, 'subtotal': 0})
         serializer = CartSerializer(cart)
-        return Response(serializer.data)
+        data = serializer.data
+        if not request.user.is_authenticated and cart.session_key:
+            data['session_key'] = cart.session_key
+        return Response(data)
 
     @action(detail=False, methods=['post'])
     def add(self, request):
@@ -233,22 +236,26 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         serializer.is_valid(raise_exception=True)
 
         total, _ = calculate_order_total(cart)
-        amount_paise = int(total * 100)
+        amount_paise = int(total * Decimal('100'))
         if amount_paise < 100:
             return Response({'error': 'Order total must be at least ₹1'}, status=status.HTTP_400_BAD_REQUEST)
 
         receipt = f"rcpt_{uuid.uuid4().hex[:12]}"
         try:
             razorpay_order = create_razorpay_order(amount_paise, receipt)
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         except Exception as exc:
             return Response({'error': f'Failed to create payment order: {exc}'}, status=status.HTTP_502_BAD_GATEWAY)
 
+        key_id = settings.RAZORPAY_KEY_ID
         return Response({
             'razorpay_order_id': razorpay_order['id'],
             'amount': amount_paise,
             'currency': 'INR',
-            'key_id': settings.RAZORPAY_KEY_ID,
+            'key_id': key_id,
             'total': total,
+            'is_test_mode': key_id.startswith('rzp_test_'),
         })
 
     @action(detail=False, methods=['post'], url_path='razorpay/verify', permission_classes=[AllowAny])
