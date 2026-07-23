@@ -4,4 +4,5 @@ set -e
 
 pip install -r requirements.txt
 python manage.py migrate
+python manage.py seed_data
 echo "Done. Now reload the web app from the Web tab."
