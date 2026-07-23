@@ -235,7 +235,7 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
         total, _ = calculate_order_total(cart)
         amount_paise = int(total * 100)
         if amount_paise < 100:
-            return Response({'error': 'Order total must be at least Rs. 1'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Order total must be at least ₹1'}, status=status.HTTP_400_BAD_REQUEST)
 
         receipt = f"rcpt_{uuid.uuid4().hex[:12]}"
         try:
